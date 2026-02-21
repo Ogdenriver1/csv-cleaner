@@ -17,6 +17,33 @@ A Telegram bot that cleans messy CSV data using AI and sends back beautiful Exce
   - Missing headers → Adds appropriate headers
   - Extra whitespace → Trimmed
 
+## Installation Options
+
+### Option 1: Git Clone (for developers)
+```bash
+git clone https://github.com/Ogdenriver1/csv-cleaner.git
+cd csv-cleaner
+pip install -r requirements.txt
+```
+
+### Option 2: Download ZIP (for non-developers)
+1. Go to https://github.com/Ogdenriver1/csv-cleaner
+2. Click the green **"Code"** button
+3. Click **"Download ZIP"**
+4. Unzip and open the folder
+5. Open Terminal and navigate to the folder:
+   ```bash
+   cd path/to/csv-cleaner
+   pip install -r requirements.txt
+   ```
+
+### Option 3: Direct Download Link
+[**Click here to download instantly**](https://github.com/Ogdenriver1/csv-cleaner/archive/refs/heads/main.zip)
+
+Then unzip and follow the setup steps below.
+
+---
+
 ## Quick Start
 
 ### 1. Create Your Telegram Bot
@@ -36,21 +63,42 @@ A Telegram bot that cleans messy CSV data using AI and sends back beautiful Exce
 
 ### 3. Install & Run
 
+#### macOS / Linux
 ```bash
-# Clone the repo
-git clone https://github.com/Ogdenriver1/csv-cleaner.git
+# Navigate to the folder (if you downloaded ZIP)
 cd csv-cleaner
 
 # Install dependencies
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 
 # Set your API keys
 export TELEGRAM_BOT_TOKEN="your-telegram-token"
 export ANTHROPIC_API_KEY="your-anthropic-key"
 
 # Run the bot!
+python3 telegram_bot.py
+```
+
+#### Windows
+```cmd
+# Navigate to the folder (if you downloaded ZIP)
+cd csv-cleaner
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Set your API keys
+set TELEGRAM_BOT_TOKEN=your-telegram-token
+set ANTHROPIC_API_KEY=your-anthropic-key
+
+# Run the bot!
 python telegram_bot.py
 ```
+
+**Note:** If you don't have Python installed:
+- **Mac**: Install from [python.org](https://www.python.org/downloads/) or use `brew install python3`
+- **Windows**: Download from [python.org](https://www.python.org/downloads/)
+- **Linux**: Usually pre-installed, or use `sudo apt install python3 python3-pip`
 
 ### 4. Use Your Bot
 
