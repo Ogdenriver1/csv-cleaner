@@ -1,9 +1,4 @@
-# Core
 anthropic>=0.18.0
-
-# Telegram Bot
-python-telegram-bot>=20.0
-
-# Excel + pivot table support
-openpyxl>=3.1.0
-pandas>=2.0.0
+pandas
+python-telegram-bot
+openpyxl

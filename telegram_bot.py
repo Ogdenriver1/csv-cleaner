@@ -17,12 +17,24 @@ import json
 import asyncio
 import logging
 import pandas as pd
-from telegram import Update
+from telegram import Bot, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 import anthropic
 import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
+
+TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+def send_file(file):
+    """Send a file to a Telegram chat (synchronous, for use from data_cleaner.py)."""
+    bot = Bot(token=TOKEN)
+    import asyncio
+    async def _send():
+        with open(file, "rb") as f:
+            await bot.send_document(chat_id=CHAT_ID, document=f)
+    asyncio.run(_send())
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
