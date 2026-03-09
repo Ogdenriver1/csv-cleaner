@@ -299,6 +299,27 @@ def is_new_data(text: str) -> bool:
     return delimiters >= len(lines) * 0.5
 
 
+def is_file_request(text: str) -> bool:
+    """Detect when the user just wants the file resent."""
+    keywords = ["give me the", "send the", "send me the", "the file", "the table",
+                "resend", "re-send", "get the file", "download"]
+    t = text.lower().strip()
+    return any(k in t for k in keywords)
+
+
+def is_valid_pivot_config(p) -> bool:
+    """Check that new_pivot has the right structure, not table data."""
+    if not isinstance(p, dict):
+        return False
+    if "index" not in p or "values" not in p or "aggfunc" not in p:
+        return False
+    if not isinstance(p.get("index"), list) or not isinstance(p.get("values"), list):
+        return False
+    if p.get("aggfunc") not in ("sum", "mean", "count"):
+        return False
+    return True
+
+
 def pivot_caption(pivot_config: dict) -> str:
     agg = {"sum": "Sum", "mean": "Average", "count": "Count"}.get(pivot_config["aggfunc"], pivot_config["aggfunc"])
     return (
@@ -353,16 +374,20 @@ async def process_new_data(update: Update, messy_data: str, output_filename: str
         pivot_config = result["pivot"]
         excel_file   = build_pivot_excel(clean_csv, pivot_config)
 
+        excel_bytes = excel_file.read()
+
         # Save session
         sessions[user_id] = {
             "csv": clean_csv,
             "pivot_config": pivot_config,
-            "history": []
+            "history": [],
+            "last_excel": excel_bytes,
+            "last_filename": output_filename,
         }
 
         await processing_msg.delete()
         await update.message.reply_document(
-            document=excel_file,
+            document=io.BytesIO(excel_bytes),
             filename=output_filename,
             caption=pivot_caption(pivot_config),
             parse_mode='Markdown'
@@ -385,6 +410,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # If there's an active session, treat as conversation
     if user_id in sessions:
         session = sessions[user_id]
+
+        # Resend the file if user just wants the file/table
+        if is_file_request(text) and session.get("last_excel"):
+            await update.message.reply_document(
+                document=io.BytesIO(session["last_excel"]),
+                filename=session.get("last_filename", "pivot_table.xlsx"),
+                caption=pivot_caption(session["pivot_config"]),
+                parse_mode='Markdown'
+            )
+            return
+
         thinking_msg = await update.message.reply_text("💭 Thinking...")
 
         try:
@@ -408,12 +444,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await thinking_msg.delete()
             await update.message.reply_text(answer)
 
-            # If Claude suggested a pivot change, rebuild and send new Excel
-            if new_pivot:
+            # If Claude suggested a valid pivot change, rebuild and send new Excel
+            if new_pivot and is_valid_pivot_config(new_pivot):
                 session["pivot_config"] = new_pivot
                 excel_file = build_pivot_excel(session["csv"], new_pivot)
+                excel_bytes = excel_file.read()
+                session["last_excel"] = excel_bytes
+                session["last_filename"] = "pivot_updated.xlsx"
                 await update.message.reply_document(
-                    document=excel_file,
+                    document=io.BytesIO(excel_bytes),
                     filename="pivot_updated.xlsx",
                     caption=pivot_caption(new_pivot),
                     parse_mode='Markdown'
