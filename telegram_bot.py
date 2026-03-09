@@ -108,7 +108,7 @@ def chat_about_table(csv_data: str, pivot_config: dict, history: list, user_mess
 
     system = f"""You are a data analyst helping the user understand and edit their pivot table.
 
-The user's cleaned data has these columns: {columns}
+IMPORTANT: The data has ONLY these columns (do not invent or add new ones): {columns}
 
 Data preview (first 10 rows):
 {preview}
@@ -118,8 +118,12 @@ Current pivot config:
 - Columns grouped by: {pivot_config.get('columns')}
 - Values: {pivot_config.get('values')} ({pivot_config.get('aggfunc')})
 
-When the user asks a question about the data, answer it clearly and concisely.
-When the user asks to change the pivot (e.g. "group by X", "show average", "add Y column"), return a new pivot config.
+Rules:
+- Only use column names from this list: {columns}
+- If the user asks to add a column that does not exist, explain that the column is not in their data and list what columns ARE available
+- If the user asks to change the grouping or aggregation using existing columns, return a new_pivot config
+- new_pivot must ONLY contain: index (list), columns (string or null), values (list), aggfunc ("sum"/"mean"/"count")
+- Never put table data or row values inside new_pivot — only the config fields above
 
 Always respond with valid JSON only:
 {{
@@ -127,9 +131,9 @@ Always respond with valid JSON only:
   "new_pivot": null
 }}
 
-Or if a pivot change is needed:
+Or if a pivot change is needed using EXISTING columns:
 {{
-  "answer": "Sure! I've updated the pivot to group by Department and show average salary.",
+  "answer": "Updated! Now grouping by Department with average salary.",
   "new_pivot": {{
     "index": ["Department"],
     "columns": null,
@@ -253,7 +257,9 @@ def build_pivot_excel(csv_data: str, pivot_config: dict) -> io.BytesIO:
                 cell.value = round(value, 2) if pivot_config["aggfunc"] == "mean" else (int(value) if value == int(value) else round(value, 2))
                 cell.number_format = '#,##0.00' if pivot_config["aggfunc"] == "mean" else '#,##0'
             else:
-                cell.value = str(value)
+                # Clean up ugly float-formatted strings like "March 8 2026.0"
+                s = str(value)
+                cell.value = s[:-2] if s.endswith(".0") else s
             cell.font = Font(bold=bold, color=fc, size=11, name="Helvetica Neue")
             cell.fill = rf
             cell.border = border()
@@ -444,8 +450,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await thinking_msg.delete()
             await update.message.reply_text(answer)
 
+            # If Claude suggested a pivot change but it's invalid, warn the user
+            if new_pivot and not is_valid_pivot_config(new_pivot):
+                df = pd.read_csv(io.StringIO(session["csv"].strip()), on_bad_lines='skip')
+                await update.message.reply_text(
+                    f"⚠️ I couldn't apply that change — the column may not exist in your data.\n\n"
+                    f"Available columns: *{', '.join(df.columns.tolist())}*",
+                    parse_mode='Markdown'
+                )
+
             # If Claude suggested a valid pivot change, rebuild and send new Excel
-            if new_pivot and is_valid_pivot_config(new_pivot):
+            elif new_pivot and is_valid_pivot_config(new_pivot):
                 session["pivot_config"] = new_pivot
                 excel_file = build_pivot_excel(session["csv"], new_pivot)
                 excel_bytes = excel_file.read()
