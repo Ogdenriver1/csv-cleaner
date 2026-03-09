@@ -152,7 +152,12 @@ Or if a pivot change is needed:
         raw = raw.split("```")[1]
         if raw.startswith("json"):
             raw = raw[4:]
-    return json.loads(raw.strip())
+    raw = raw.strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # Claude returned plain text — wrap it as an answer
+        return {"answer": raw, "new_pivot": None}
 
 
 # ── Excel builder ─────────────────────────────────────────────────────────────
