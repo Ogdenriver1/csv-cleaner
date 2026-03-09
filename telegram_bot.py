@@ -97,56 +97,65 @@ Data:
 
 def chat_about_table(csv_data: str, pivot_config: dict, history: list, user_message: str) -> dict:
     """
-    Have a conversation about the table.
-    Returns { "answer": str, "new_pivot": dict|null }
-    If new_pivot is set, rebuild the Excel with those settings.
+    Full data editing + pivot conversation.
+    Returns {
+      "answer": str,
+      "new_csv": str|null,       -- updated CSV if data changed
+      "new_pivot": dict|null,    -- updated pivot config if changed
+      "filter": str|null,        -- pandas query string to filter rows
+      "sort_by": str|null,       -- column name to sort by
+      "sort_asc": bool           -- sort direction
+    }
     """
-    # Build a readable preview of the data
     df = pd.read_csv(io.StringIO(csv_data.strip()), on_bad_lines='skip')
-    preview = df.head(10).to_string(index=False)
+    full_data = df.to_csv(index=False)
     columns = list(df.columns)
 
-    system = f"""You are a data analyst helping the user understand and edit their pivot table.
+    system = f"""You are a data analyst helping the user edit their data and pivot table.
 
-IMPORTANT: The data has ONLY these columns (do not invent or add new ones): {columns}
+Current columns: {columns}
 
-Data preview (first 10 rows):
-{preview}
+Full data (CSV):
+{full_data}
 
-Current pivot config:
-- Rows grouped by: {pivot_config.get('index')}
-- Columns grouped by: {pivot_config.get('columns')}
+Current pivot:
+- Rows: {pivot_config.get('index')}
+- Columns: {pivot_config.get('columns')}
 - Values: {pivot_config.get('values')} ({pivot_config.get('aggfunc')})
 
-Rules:
-- Only use column names from this list: {columns}
-- If the user asks to add a column that does not exist, explain that the column is not in their data and list what columns ARE available
-- If the user asks to change the grouping or aggregation using existing columns, return a new_pivot config
-- new_pivot must ONLY contain: index (list), columns (string or null), values (list), aggfunc ("sum"/"mean"/"count")
-- Never put table data or row values inside new_pivot — only the config fields above
+You can make ANY of these changes:
+1. Add a new column (even with user-provided values or calculated from existing ones)
+2. Add new rows
+3. Edit existing values
+4. Delete rows or columns
+5. Change pivot grouping, values, or aggregation
+6. Filter rows (e.g. only show certain dates)
+7. Sort by a column
+8. Add calculated columns (e.g. Tax = Pay * 0.2)
 
-Always respond with valid JSON only:
+Always return valid JSON only:
 {{
-  "answer": "Your response to the user here",
-  "new_pivot": null
+  "answer": "What you did, explained simply",
+  "new_csv": null,
+  "new_pivot": null,
+  "filter": null,
+  "sort_by": null,
+  "sort_asc": true
 }}
 
-Or if a pivot change is needed using EXISTING columns:
-{{
-  "answer": "Updated! Now grouping by Department with average salary.",
-  "new_pivot": {{
-    "index": ["Department"],
-    "columns": null,
-    "values": ["Salary"],
-    "aggfunc": "mean"
-  }}
-}}"""
+Rules for each field:
+- new_csv: full updated CSV string if data was added/edited/deleted. Include ALL rows and headers.
+- new_pivot: ONLY {{ "index": [...], "columns": "..." or null, "values": [...], "aggfunc": "sum"/"mean"/"count" }} — never put table data here
+- filter: a pandas DataFrame.query() string e.g. "Pay > 100" or "Week == 'March 8'"
+- sort_by: column name string to sort by, or null
+- sort_asc: true for ascending, false for descending
+- Set fields to null if not changing them"""
 
     messages = history + [{"role": "user", "content": user_message}]
 
     msg = anthropic_client.messages.create(
-        model="claude-3-haiku-20240307",
-        max_tokens=1024,
+        model="claude-3-5-haiku-20241022",
+        max_tokens=4096,
         system=system,
         messages=messages
     )
@@ -160,8 +169,7 @@ Or if a pivot change is needed using EXISTING columns:
     try:
         return json.loads(raw)
     except json.JSONDecodeError:
-        # Claude returned plain text — wrap it as an answer
-        return {"answer": raw, "new_pivot": None}
+        return {"answer": raw, "new_csv": None, "new_pivot": None, "filter": None, "sort_by": None, "sort_asc": True}
 
 
 # ── Excel builder ─────────────────────────────────────────────────────────────
@@ -441,7 +449,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
 
             answer    = response.get("answer", "")
+            new_csv   = response.get("new_csv")
             new_pivot = response.get("new_pivot")
+            filter_q  = response.get("filter")
+            sort_by   = response.get("sort_by")
+            sort_asc  = response.get("sort_asc", True)
 
             # Update conversation history
             session["history"].append({"role": "user",      "content": text})
@@ -450,26 +462,56 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await thinking_msg.delete()
             await update.message.reply_text(answer)
 
-            # If Claude suggested a pivot change but it's invalid, warn the user
-            if new_pivot and not is_valid_pivot_config(new_pivot):
+            # Apply data changes
+            rebuild = False
+
+            if new_csv:
+                session["csv"] = new_csv
+                rebuild = True
+
+            # Apply filter
+            if filter_q:
+                try:
+                    df = pd.read_csv(io.StringIO(session["csv"].strip()), on_bad_lines='skip')
+                    df = df.query(filter_q)
+                    session["csv"] = df.to_csv(index=False)
+                    rebuild = True
+                except Exception as fe:
+                    await update.message.reply_text(f"⚠️ Couldn't apply filter: {fe}")
+
+            # Apply sort
+            if sort_by:
+                try:
+                    df = pd.read_csv(io.StringIO(session["csv"].strip()), on_bad_lines='skip')
+                    if sort_by in df.columns:
+                        df = df.sort_values(sort_by, ascending=sort_asc)
+                        session["csv"] = df.to_csv(index=False)
+                        rebuild = True
+                except Exception as se:
+                    await update.message.reply_text(f"⚠️ Couldn't sort: {se}")
+
+            # Apply pivot config change
+            if new_pivot and is_valid_pivot_config(new_pivot):
+                session["pivot_config"] = new_pivot
+                rebuild = True
+            elif new_pivot and not is_valid_pivot_config(new_pivot):
                 df = pd.read_csv(io.StringIO(session["csv"].strip()), on_bad_lines='skip')
                 await update.message.reply_text(
-                    f"⚠️ I couldn't apply that change — the column may not exist in your data.\n\n"
+                    f"⚠️ Couldn't update pivot config — invalid structure.\n"
                     f"Available columns: *{', '.join(df.columns.tolist())}*",
                     parse_mode='Markdown'
                 )
 
-            # If Claude suggested a valid pivot change, rebuild and send new Excel
-            elif new_pivot and is_valid_pivot_config(new_pivot):
-                session["pivot_config"] = new_pivot
-                excel_file = build_pivot_excel(session["csv"], new_pivot)
+            # Rebuild and send Excel if anything changed
+            if rebuild:
+                excel_file = build_pivot_excel(session["csv"], session["pivot_config"])
                 excel_bytes = excel_file.read()
                 session["last_excel"] = excel_bytes
                 session["last_filename"] = "pivot_updated.xlsx"
                 await update.message.reply_document(
                     document=io.BytesIO(excel_bytes),
                     filename="pivot_updated.xlsx",
-                    caption=pivot_caption(new_pivot),
+                    caption=pivot_caption(session["pivot_config"]),
                     parse_mode='Markdown'
                 )
 
